@@ -120,10 +120,10 @@ function App() {
   const syncWithOpenClaw = async () => {
     setIsLoading(true)
     setError(null)
-    
+
     try {
-      // Fetch cron jobs from OpenClaw
-      const response = await fetch('/api/cron/list')
+      // Fetch cron jobs from OpenClaw via proxy
+      const response = await fetch('http://localhost:8010/proxy/cron/list')
       if (response.ok) {
         const data = await response.json()
         if (data.jobs) {
@@ -154,7 +154,7 @@ function App() {
       const runs: CronRun[] = []
       for (const job of cronJobs) {
         try {
-          const runsResponse = await fetch(`/api/cron/runs?jobId=${job.id}`)
+          const runsResponse = await fetch(`http://localhost:8010/proxy/cron/runs?jobId=${job.id}`)
           if (runsResponse.ok) {
             const runsData = await runsResponse.json()
             if (runsData.entries) {
@@ -199,7 +199,7 @@ function App() {
   // Workflow actions - connect to real OpenClaw API
   const createWorkflow = async (workflow: Omit<Workflow, 'id' | 'createdAt'>) => {
     try {
-      const response = await fetch('/api/cron/add', {
+      const response = await fetch('http://localhost:8010/proxy/cron/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -250,7 +250,7 @@ function App() {
     
     // Try to update on server if it's a real cron job
     try {
-      await fetch('/api/cron/update', {
+      await fetch('http://localhost:8010/proxy/cron/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -267,7 +267,7 @@ function App() {
 
   const deleteWorkflow = async (id: string) => {
     try {
-      await fetch('/api/cron/remove', {
+      await fetch('http://localhost:8010/proxy/cron/remove', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: id }),
@@ -280,7 +280,7 @@ function App() {
 
   const runWorkflowNow = async (workflowId: string) => {
     try {
-      const response = await fetch('/api/cron/run', {
+      const response = await fetch('http://localhost:8010/proxy/cron/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: workflowId }),
