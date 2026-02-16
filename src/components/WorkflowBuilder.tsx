@@ -4,10 +4,10 @@ import type { Workflow, Agent } from '../types'
 interface WorkflowBuilderProps {
   workflows: Workflow[]
   agents: Agent[]
-  onCreateWorkflow: (workflow: Omit<Workflow, 'id' | 'createdAt'>) => void
-  onUpdateWorkflow: (id: string, updates: Partial<Workflow>) => void
-  onDeleteWorkflow: (id: string) => void
-  onRunNow: (workflowId: string) => void
+  onCreateWorkflow: (workflow: Omit<Workflow, 'id' | 'createdAt'>) => Promise<void>
+  onUpdateWorkflow: (id: string, updates: Partial<Workflow>) => Promise<void>
+  onDeleteWorkflow: (id: string) => Promise<void>
+  onRunNow: (workflowId: string) => Promise<void>
 }
 
 const PlusIcon = () => (
@@ -77,12 +77,12 @@ export function WorkflowBuilder({
     timezone: 'America/Chicago',
   })
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const cronExpression = formData.schedulePreset === 'custom' 
       ? formData.customCron 
       : formData.schedulePreset
 
-    onCreateWorkflow({
+    await onCreateWorkflow({
       name: formData.name,
       description: formData.description,
       agentId: formData.agentId,
@@ -98,13 +98,13 @@ export function WorkflowBuilder({
     setShowCreateModal(false)
   }
 
-  const handleUpdate = () => {
+  const handleUpdate = async () => {
     if (selectedWorkflow) {
       const cronExpression = formData.schedulePreset === 'custom' 
         ? formData.customCron 
         : formData.schedulePreset
 
-      onUpdateWorkflow(selectedWorkflow.id, {
+      await onUpdateWorkflow(selectedWorkflow.id, {
         name: formData.name,
         description: formData.description,
         agentId: formData.agentId,
@@ -120,15 +120,15 @@ export function WorkflowBuilder({
     }
   }
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this workflow?')) {
-      onDeleteWorkflow(id)
+      await onDeleteWorkflow(id)
     }
   }
 
-  const toggleWorkflowStatus = (workflow: Workflow) => {
+  const toggleWorkflowStatus = async (workflow: Workflow) => {
     const newStatus = workflow.status === 'active' ? 'paused' : 'active'
-    onUpdateWorkflow(workflow.id, { status: newStatus })
+    await onUpdateWorkflow(workflow.id, { status: newStatus })
   }
 
   const openEditModal = (workflow: Workflow) => {

@@ -37,52 +37,70 @@ export const MessageIcon = () => (
   </svg>
 )
 
-// Initial mock data
-const initialAgents: Agent[] = [
-  { id: '1', name: 'Research Agent', description: 'Web search and data gathering', status: 'active', model: 'kimi-k2.5', tasksCompleted: 45, lastActive: new Date().toISOString(), canCommunicate: true },
-  { id: '2', name: 'Trading Agent', description: 'Market analysis and trade execution', status: 'active', model: 'anthropic/claude-opus-4-6', tasksCompleted: 23, lastActive: new Date().toISOString(), canCommunicate: true },
-  { id: '3', name: 'CRM Agent', description: 'Notion CRM management', status: 'idle', model: 'kimi-k2.5', tasksCompleted: 128, lastActive: new Date(Date.now() - 3600000).toISOString(), canCommunicate: false },
-]
+// Sync icon
+export const SyncIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+  </svg>
+)
 
-const initialWorkflows: Workflow[] = [
-  { 
-    id: '1', 
-    name: 'Morning Brief', 
-    description: 'Daily 7 AM market and task briefing',
-    agentId: '1',
-    schedule: { type: 'cron', expression: '0 7 * * *', timezone: 'America/Chicago' },
-    status: 'active',
-    prompt: 'Generate morning brief with market updates and tasks',
-    lastRun: new Date(Date.now() - 86400000).toISOString(),
-    nextRun: new Date(Date.now() + 3600000).toISOString()
-  },
-]
+// API types from OpenClaw
+interface CronJob {
+  id: string
+  name: string
+  enabled: boolean
+  schedule: {
+    kind: string
+    expr?: string
+    tz?: string
+  }
+  state?: {
+    nextRunAtMs?: number
+    lastRunAtMs?: number
+    lastStatus?: string
+    consecutiveErrors?: number
+    lastError?: string
+  }
+  payload?: {
+    model?: string
+    message?: string
+  }
+}
 
-const initialSkills: Skill[] = [
-  { id: '1', name: 'web-search', description: 'Search the web for information', version: '1.0.0', enabled: true },
-  { id: '2', name: 'notion-api', description: 'Interact with Notion databases', version: '1.0.0', enabled: true },
-]
-
-const initialMessages: AgentMessage[] = []
+interface CronRun {
+  ts: number
+  jobId: string
+  status: string
+  error?: string
+  summary?: string
+  runAtMs: number
+  durationMs: number
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [agents, setAgents] = useState<Agent[]>(initialAgents)
-  const [workflows, setWorkflows] = useState<Workflow[]>(initialWorkflows)
-  const [skills, setSkills] = useState<Skill[]>(initialSkills)
-  const [messages, setMessages] = useState<AgentMessage[]>(initialMessages)
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [messages, setMessages] = useState<AgentMessage[]>([])
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([])
+  const [cronRuns, setCronRuns] = useState<CronRun[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [lastSync, setLastSync] = useState<Date | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  // Load from localStorage on mount
+  // Load data from localStorage on mount
   useEffect(() => {
     const savedAgents = localStorage.getItem('mc_agents')
-    const savedWorkflows = localStorage.getItem('mc_workflows')
     const savedSkills = localStorage.getItem('mc_skills')
     const savedMessages = localStorage.getItem('mc_messages')
     
     if (savedAgents) setAgents(JSON.parse(savedAgents))
-    if (savedWorkflows) setWorkflows(JSON.parse(savedWorkflows))
     if (savedSkills) setSkills(JSON.parse(savedSkills))
     if (savedMessages) setMessages(JSON.parse(savedMessages))
+    
+    // Initial sync from OpenClaw
+    syncWithOpenClaw()
   }, [])
 
   // Save to localStorage on changes
@@ -91,16 +109,74 @@ function App() {
   }, [agents])
 
   useEffect(() => {
-    localStorage.setItem('mc_workflows', JSON.stringify(workflows))
-  }, [workflows])
-
-  useEffect(() => {
     localStorage.setItem('mc_skills', JSON.stringify(skills))
   }, [skills])
 
   useEffect(() => {
     localStorage.setItem('mc_messages', JSON.stringify(messages))
   }, [messages])
+
+  // Sync with OpenClaw API
+  const syncWithOpenClaw = async () => {
+    setIsLoading(true)
+    setError(null)
+    
+    try {
+      // Fetch cron jobs from OpenClaw
+      const response = await fetch('/api/cron/list')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.jobs) {
+          setCronJobs(data.jobs)
+          
+          // Convert cron jobs to workflows
+          const convertedWorkflows: Workflow[] = data.jobs.map((job: CronJob) => ({
+            id: job.id,
+            name: job.name,
+            description: job.payload?.message?.substring(0, 100) + '...' || 'No description',
+            agentId: '1', // Default agent
+            schedule: {
+              type: job.schedule.kind === 'cron' ? 'cron' : 'interval',
+              expression: job.schedule.expr || '',
+              timezone: job.schedule.tz || 'America/Chicago',
+            },
+            status: job.enabled ? (job.state?.lastStatus === 'error' ? 'error' : 'active') : 'paused',
+            prompt: job.payload?.message || '',
+            lastRun: job.state?.lastRunAtMs ? new Date(job.state.lastRunAtMs).toISOString() : undefined,
+            nextRun: job.state?.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : undefined,
+          }))
+          
+          setWorkflows(convertedWorkflows)
+        }
+      }
+
+      // Fetch recent runs for all jobs
+      const runs: CronRun[] = []
+      for (const job of cronJobs) {
+        try {
+          const runsResponse = await fetch(`/api/cron/runs?jobId=${job.id}`)
+          if (runsResponse.ok) {
+            const runsData = await runsResponse.json()
+            if (runsData.entries) {
+              runs.push(...runsData.entries)
+            }
+          }
+        } catch (e) {
+          // Individual job runs may fail, continue
+        }
+      }
+      
+      // Sort by timestamp desc
+      runs.sort((a, b) => b.ts - a.ts)
+      setCronRuns(runs.slice(0, 50)) // Keep last 50
+      
+      setLastSync(new Date())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync with OpenClaw')
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   // Agent actions
   const createAgent = (agent: Omit<Agent, 'id' | 'createdAt'>) => {
@@ -118,37 +194,106 @@ function App() {
 
   const deleteAgent = (id: string) => {
     setAgents(agents.filter(a => a.id !== id))
-    setWorkflows(workflows.filter(w => w.agentId !== id))
   }
 
-  // Workflow actions
-  const createWorkflow = (workflow: Omit<Workflow, 'id' | 'createdAt'>) => {
-    const newWorkflow: Workflow = {
-      ...workflow,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
+  // Workflow actions - connect to real OpenClaw API
+  const createWorkflow = async (workflow: Omit<Workflow, 'id' | 'createdAt'>) => {
+    try {
+      const response = await fetch('/api/cron/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: workflow.name,
+          schedule: {
+            kind: 'cron',
+            expr: workflow.schedule.expression,
+            tz: workflow.schedule.timezone,
+          },
+          payload: {
+            kind: 'agentTurn',
+            message: workflow.prompt,
+            model: 'fast',
+            thinking: 'off',
+          },
+          sessionTarget: 'isolated',
+          enabled: workflow.status === 'active',
+        }),
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        const newWorkflow: Workflow = {
+          ...workflow,
+          id: result.id || Date.now().toString(),
+          createdAt: new Date().toISOString(),
+        }
+        setWorkflows([...workflows, newWorkflow])
+        await syncWithOpenClaw() // Refresh from server
+      } else {
+        throw new Error('Failed to create cron job')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create workflow')
+      // Fallback to local
+      const newWorkflow: Workflow = {
+        ...workflow,
+        id: Date.now().toString(),
+        createdAt: new Date().toISOString(),
+      }
+      setWorkflows([...workflows, newWorkflow])
     }
-    setWorkflows([...workflows, newWorkflow])
   }
 
-  const updateWorkflow = (id: string, updates: Partial<Workflow>) => {
+  const updateWorkflow = async (id: string, updates: Partial<Workflow>) => {
+    // Update local state
     setWorkflows(workflows.map(w => w.id === id ? { ...w, ...updates } : w))
+    
+    // Try to update on server if it's a real cron job
+    try {
+      await fetch('/api/cron/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: id,
+          patch: {
+            enabled: updates.status === 'active',
+          },
+        }),
+      })
+    } catch {
+      // Ignore errors for local workflows
+    }
   }
 
-  const deleteWorkflow = (id: string) => {
+  const deleteWorkflow = async (id: string) => {
+    try {
+      await fetch('/api/cron/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: id }),
+      })
+    } catch {
+      // Ignore errors
+    }
     setWorkflows(workflows.filter(w => w.id !== id))
   }
 
   const runWorkflowNow = async (workflowId: string) => {
-    // In a real implementation, this would call the OpenClaw API
-    console.log(`Running workflow ${workflowId}`)
-    updateWorkflow(workflowId, { 
-      lastRun: new Date().toISOString(),
-      status: 'running'
-    })
-    setTimeout(() => {
-      updateWorkflow(workflowId, { status: 'active' })
-    }, 2000)
+    try {
+      const response = await fetch('/api/cron/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: workflowId }),
+      })
+      
+      if (response.ok) {
+        updateWorkflow(workflowId, { status: 'running' })
+        // Refresh after a delay
+        setTimeout(syncWithOpenClaw, 5000)
+      }
+    } catch (err) {
+      setError('Failed to run workflow')
+    }
   }
 
   // Skill actions
@@ -206,13 +351,31 @@ function App() {
               <h1 className="text-xl font-bold">Mission Control</h1>
             </div>
             <div className="flex items-center gap-4">
+              <button
+                onClick={syncWithOpenClaw}
+                disabled={isLoading}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <span className={isLoading ? 'animate-spin' : ''}><SyncIcon /></span>
+                {isLoading ? 'Syncing...' : 'Sync'}
+              </button>
               <span className="text-sm text-gray-400">v3.1</span>
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-xs text-gray-400">Online</span>
+                <div className={`w-2 h-2 rounded-full ${error ? 'bg-red-500' : 'bg-green-500'} ${isLoading ? 'animate-pulse' : ''}`}></div>
+                <span className="text-xs text-gray-400">{error ? 'Error' : 'Online'}</span>
               </div>
             </div>
           </div>
+          {error && (
+            <div className="px-4 py-2 bg-red-900/50 text-red-400 text-sm">
+              Error: {error}
+            </div>
+          )}
+          {lastSync && (
+            <div className="px-4 py-1 text-xs text-gray-500">
+              Last synced: {lastSync.toLocaleString()}
+            </div>
+          )}
         </div>
       </header>
 
@@ -252,6 +415,10 @@ function App() {
                   <span className="font-medium">{workflows.filter(w => w.status === 'active').length}/{workflows.length}</span>
                 </div>
                 <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Cron Jobs</span>
+                  <span className="font-medium">{cronJobs.length}</span>
+                </div>
+                <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Messages</span>
                   <span className="font-medium">{messages.filter(m => !m.read).length} unread</span>
                 </div>
@@ -262,10 +429,12 @@ function App() {
           {/* Main Content */}
           <main className="flex-1 min-w-0">
             {activeTab === 'dashboard' && (
-              <Dashboard 
-                agents={agents} 
-                workflows={workflows} 
+              <Dashboard
+                agents={agents}
+                workflows={workflows}
                 messages={messages}
+                cronJobs={cronJobs}
+                cronRuns={cronRuns}
                 onMarkMessageRead={markMessageRead}
               />
             )}
